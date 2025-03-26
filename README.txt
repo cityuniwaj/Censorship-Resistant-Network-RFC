@@ -30,6 +30,7 @@ The following functionality has been implemented:
 - Handling of Name Request/Response messages
 - Basic message processing framework for incoming packets
 - Implementation of isActive() to check if a node is responsive
+- Relay stack management (pushRelay/popRelay)
 
 Not yet implemented:
 - Handling of Nearest, Key Existence, Read, Write, CAS, and Relay messages

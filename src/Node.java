@@ -514,13 +514,19 @@ public class Node implements NodeInterface {
     
     // 2nd method implementation
     public void pushRelay(String nodeName) throws Exception {
-        throw new Exception("Not implemented");
+        // Add the node name to the top of the relay stack
+        relayStack.push(nodeName);
     }
 
     // 3rd method implementation
     public void popRelay() throws Exception {
-        throw new Exception("Not implemented");
+        // Remove the top entry from the relay stack if it's not empty
+        if (!relayStack.isEmpty()) {
+            relayStack.pop();
+        }
     }
+
+    // ---------------------------------------------------------------------------------------
 
     // 4th method implementation
     public boolean exists(String key) throws Exception {
