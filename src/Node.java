@@ -191,6 +191,111 @@ public class Node implements NodeInterface {
         int count = Math.min(3, allEntries.size());
         return allEntries.subList(0, count);
     }
+    
+    // Helper methods for message formatting and parsing
+
+    // Generate a random transaction ID (two non-space bytes)
+    private String generateTransactionID() {
+        byte[] id = new byte[2];
+        do {
+            random.nextBytes(id);
+        } while (id[0] == 0x20 || id[1] == 0x20); // Ensure no spaces
+        
+        return new String(id);
+    }
+
+    // Format a string according to CRN protocol (count + space + string + space)
+    private String formatString(String str) {
+        int spaceCount = 0;
+        for (char c : str.toCharArray()) {
+            if (c == ' ') spaceCount++;
+        }
+        
+        return spaceCount + " " + str + " ";
+    }
+
+    // Format a key/value pair according to CRN protocol
+    private String formatKeyValue(String key, String value) {
+        return formatString(key) + formatString(value);
+    }
+
+    // Parse a formatted string from a CRN message
+    private String parseString(String message, int[] position) {
+        // Find the space count
+        int endPos = message.indexOf(' ', position[0]);
+        if (endPos == -1) return null;
+        
+        int spaceCount = Integer.parseInt(message.substring(position[0], endPos));
+        position[0] = endPos + 1; // Move past the first space
+        
+        // Find the end of the string (after the correct number of spaces)
+        int spacesFound = 0;
+        int startPos = position[0];
+        
+        while (position[0] < message.length() && spacesFound <= spaceCount) {
+            if (message.charAt(position[0]) == ' ') {
+                spacesFound++;
+            }
+            position[0]++;
+        }
+        
+        // If we didn't find enough spaces, the format is incorrect
+        if (spacesFound != spaceCount + 1) return null;
+        
+        // Return the string without the final space
+        return message.substring(startPos, position[0] - 1);
+    }
+
+    // Send a UDP packet with the given message to the specified address and port
+    private void sendMessage(String message, InetAddress address, int port) throws Exception {
+        byte[] buffer = message.getBytes();
+        DatagramPacket packet = new DatagramPacket(buffer, buffer.length, address, port);
+        socket.send(packet);
+    }
+
+    // Methods for creating different message types
+
+    // Create a name request message
+    private String createNameRequest() {
+        String transactionID = generateTransactionID();
+        return transactionID + " G";
+    }
+
+    // Create a nearest request message
+    private String createNearestRequest(String hashIDHex) {
+        String transactionID = generateTransactionID();
+        return transactionID + " N " + hashIDHex;
+    }
+
+    // Create a key existence request message
+    private String createExistenceRequest(String key) {
+        String transactionID = generateTransactionID();
+        return transactionID + " E " + formatString(key);
+    }
+
+    // Create a read request message
+    private String createReadRequest(String key) {
+        String transactionID = generateTransactionID();
+        return transactionID + " R " + formatString(key);
+    }
+
+    // Create a write request message
+    private String createWriteRequest(String key, String value) {
+        String transactionID = generateTransactionID();
+        return transactionID + " W " + formatKeyValue(key, value);
+    }
+
+    // Create a compare-and-swap request message
+    private String createCASRequest(String key, String currentValue, String newValue) {
+        String transactionID = generateTransactionID();
+        return transactionID + " C " + formatString(key) + formatString(currentValue) + formatString(newValue);
+    }
+
+    // Create a relay message
+    private String createRelayMessage(String nodeName, String message) {
+        String transactionID = generateTransactionID();
+        return transactionID + " V " + formatString(nodeName) + message;
+    }
 
     // setNodeName method
     public void setNodeName(String nodeName) throws Exception {
