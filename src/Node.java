@@ -309,35 +309,235 @@ public class Node implements NodeInterface {
         this.socket = new DatagramSocket(portNumber);
         this.localAddress = InetAddress.getLocalHost();
     }
-
+    
+    // 1st method implementation
     public void handleIncomingMessages(int delay) throws Exception {
-        throw new Exception("Not implemented");
+        byte[] buffer = new byte[1024]; // Buffer for incoming packets
+        DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+        
+        // Set socket timeout based on delay parameter
+        if (delay > 0) {
+            socket.setSoTimeout(delay);
+        } else {
+            socket.setSoTimeout(0); // Infinite timeout
+        }
+        
+        try {
+            while (true) {
+                try {
+                    // Wait for an incoming packet
+                    socket.receive(packet);
+                    
+                    // Convert packet data to string
+                    String message = new String(packet.getData(), 0, packet.getLength());
+                    
+                    // Process the message
+                    processMessage(message, packet.getAddress(), packet.getPort());
+                    
+                    // If delay is 0, continue indefinitely
+                    // Otherwise, process one message and return
+                    if (delay > 0) {
+                        return;
+                    }
+                } catch (SocketTimeoutException e) {
+                    // Timeout occurred, return as specified
+                    return;
+                }
+            }
+        } catch (IOException e) {
+            throw new Exception("Error handling incoming messages: " + e.getMessage());
+        }
+    }
+    
+    // Process an incoming message and send appropriate response
+    private void processMessage(String message, InetAddress sourceAddress, int sourcePort) throws Exception {
+        // Message must be at least 4 characters: 2 for transaction ID, 1 for space, 1 for message type
+        if (message.length() < 4) {
+            return; // Invalid message format
+        }
+        
+        // Extract the transaction ID (first two characters)
+        String transactionID = message.substring(0, 2);
+        
+        // Check if this is a response to a pending request
+        if (pendingRequests.containsKey(transactionID)) {
+            // This is a response to our request
+            ResponseHandler handler = pendingRequests.get(transactionID);
+            handler.handleResponse(message);
+            pendingRequests.remove(transactionID);
+            return;
+        }
+        
+        // This is a new request, process based on message type
+        char messageType = message.charAt(3);
+        
+        // For version 1.3, we only implement the Name Request ('G')
+        if (messageType == 'G') { // Name Request
+            handleNameRequest(transactionID, sourceAddress, sourcePort);
+        }
+        // Other message types will be implemented in future versions
+    }
+    
+    // Handler method for Name Request
+    private void handleNameRequest(String transactionID, InetAddress sourceAddress, int sourcePort) throws Exception {
+        // Create response message: transactionID + " H " + nodeName
+        String response = transactionID + " H " + formatString(nodeName);
+        sendMessage(response, sourceAddress, sourcePort);
+        
+        // Passive mapping: store the address of this node if we don't have it
+        String address = sourceAddress.getHostAddress() + ":" + sourcePort;
+        
+        // We'll handle storing the address in a future version
     }
     
     public boolean isActive(String nodeName) throws Exception {
-        throw new Exception("Not implemented");
+        // Look up the node in our address entries
+        AddressEntry entry = findAddressEntryByName(nodeName);
+        
+        if (entry == null) {
+            return false; // We don't know this node
+        }
+        
+        // Create a new transaction ID for this request
+        final String transactionID = generateTransactionID();
+        
+        // Create a name request message
+        String request = transactionID + " G";
+        
+        // Prepare for the response
+        final boolean[] isActive = {false};
+        final boolean[] responseReceived = {false};
+        
+        // Create a response handler
+        ResponseHandler handler = new ResponseHandler() {
+            @Override
+            public void handleResponse(String response) {
+                // Check if the response is a valid name response
+                if (response.length() >= 4 && response.startsWith(transactionID) && response.charAt(3) == 'H') {
+                    // Parse the node name from the response
+                    int[] position = {5}; // Start after "XX H "
+                    String respondingNodeName = parseString(response, position);
+                    
+                    // Check if the node name matches what we expect
+                    if (respondingNodeName != null && respondingNodeName.equals(nodeName)) {
+                        isActive[0] = true;
+                    }
+                }
+                responseReceived[0] = true;
+            }
+            
+            @Override
+            public void handleTimeout() {
+                responseReceived[0] = true;
+            }
+        };
+        
+        // Register the handler
+        pendingRequests.put(transactionID, handler);
+        
+        try {
+            // Send the request
+            sendMessage(request, entry.getInetAddress(), entry.getPort());
+            
+            // Set a timeout
+            Timer timer = new Timer();
+            timer.schedule(new TimerTask() {
+                @Override
+                public void run() {
+                    ResponseHandler h = pendingRequests.remove(transactionID);
+                    if (h != null && !responseReceived[0]) {
+                        h.handleTimeout();
+                    }
+                }
+            }, 5000); // 5 second timeout
+            
+            // Wait for the response by processing incoming messages
+            while (!responseReceived[0]) {
+                handleIncomingMessages(100); // Wait with 100ms timeout
+            }
+            
+            return isActive[0];
+        } catch (Exception e) {
+            // Clean up in case of failure
+            pendingRequests.remove(transactionID);
+            throw e;
+        }
     }
     
+    // Helper method to find an address entry by node name
+    private AddressEntry findAddressEntryByName(String nodeName) {
+        for (List<AddressEntry> entries : addressEntries.values()) {
+            for (AddressEntry entry : entries) {
+                if (entry.nodeName.equals(nodeName)) {
+                    return entry;
+                }
+            }
+        }
+        return null;
+    }
+
+    // TESTER FILE HELPER METHODS TO TEST CRN MESSAGES
+    // Files stored in the Test Programs folder must be COMPILED and RUN in the main source
+    // folder or wherever the main compiled java source code classes are (HashID.class, 
+    // LocalTest.class, Node.class, NodeInterface.class etc)
+    // These files are NOT part of the LocalTest.java program, they are just for me to make
+    // sure that the CRN message implementations i have created are creating nodes
+    // and are working as intended.
+    // ---------------------------------------------------------------------------------------
+
+
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+    // UNCOMMENT AND MOVE THE NameRequestTest.java FILE TO THE MAIN SRC FOLDER, THEN COMPILE AND RUN IT
+    ////////////////////////////////////////////////////////////////////////////////////////////////////
+    
+    // // Helper method for testing 1st method implementation - add an address entry manually
+    // public void addAddressEntry(String nodeName, String address) throws Exception {
+    //     AddressEntry entry = new AddressEntry(nodeName, address);
+        
+    //     // Calculate the distance between this node and the entry
+    //     int distance = calculateDistance(nodeHashID, entry.hashID);
+        
+    //     // Get or create the list for this distance
+    //     List<AddressEntry> entries = addressEntries.getOrDefault(distance, new ArrayList<>());
+        
+    //     // Add the entry if we have fewer than 3 at this distance
+    //     if (entries.size() < 3) {
+    //         entries.add(entry);
+    //         addressEntries.put(distance, entries);
+    //     }
+    // }
+
+
+
+    // ---------------------------------------------------------------------------------------
+    
+    // 2nd method implementation
     public void pushRelay(String nodeName) throws Exception {
         throw new Exception("Not implemented");
     }
 
+    // 3rd method implementation
     public void popRelay() throws Exception {
         throw new Exception("Not implemented");
     }
 
+    // 4th method implementation
     public boolean exists(String key) throws Exception {
         throw new Exception("Not implemented");
     }
     
+    // 5th method implementation
     public String read(String key) throws Exception {
         throw new Exception("Not implemented");
     }
 
+    // 6th method implementation
     public boolean write(String key, String value) throws Exception {
         throw new Exception("Not implemented");
     }
 
+    // 7th method implementation
     public boolean CAS(String key, String currentValue, String newValue) throws Exception {
         throw new Exception("Not implemented");
     }
