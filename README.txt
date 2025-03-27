@@ -31,7 +31,9 @@ The following functionality has been implemented:
 - Basic message processing framework for incoming packets
 - Implementation of isActive() to check if a node is responsive
 - Relay stack management (pushRelay/popRelay)
+- Key existence checking (exists method and Key Existence Request/Response)
+- Message relay handling (forwarding messages through relay nodes)
 
 Not yet implemented:
-- Handling of Nearest, Key Existence, Read, Write, CAS, and Relay messages
-- Complete key/value operations (exists, read, write, CAS)
+- Handling of Nearest, Read, Write, and CAS messages
+- Complete key/value operations (read, write, CAS)

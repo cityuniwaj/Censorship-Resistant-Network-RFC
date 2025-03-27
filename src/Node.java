@@ -371,11 +371,149 @@ public class Node implements NodeInterface {
         // This is a new request, process based on message type
         char messageType = message.charAt(3);
         
-        // For version 1.3, we only implement the Name Request ('G')
-        if (messageType == 'G') { // Name Request
-            handleNameRequest(transactionID, sourceAddress, sourcePort);
+        switch (messageType) {
+            case 'G': // Name Request
+                handleNameRequest(transactionID, sourceAddress, sourcePort);
+                break;
+                
+            case 'E': // Key Existence Request
+                if (message.length() < 5) return; // Invalid format
+                int[] position = {5}; // Start parsing after "XX E "
+                String existKey = parseString(message, position);
+                if (existKey == null) return; // Invalid format
+                handleExistenceRequest(transactionID, existKey, sourceAddress, sourcePort);
+                break;
+
+            case 'V': // Relay Request
+                if (message.length() < 5) return; // Invalid format
+                int[] relayPosition = {5}; // Start parsing after "XX V "
+                String relayNodeName = parseString(message, relayPosition);
+                if (relayNodeName == null) return; // Invalid format
+                String relayMessage = message.substring(relayPosition[0]);
+                handleRelayRequest(transactionID, relayNodeName, relayMessage, sourceAddress, sourcePort);
+                break;
+                
+            // Other message types will be implemented in future versions
         }
-        // Other message types will be implemented in future versions
+    }
+
+    // Handler method for Relay Request
+    private void handleRelayRequest(String transactionID, String targetNodeName, String relayedMessage, InetAddress sourceAddress, int sourcePort) throws Exception {
+        System.out.println("DEBUG: Node " + nodeName + " received relay request for: " + targetNodeName);
+        
+        // Find the target node's address
+        AddressEntry targetEntry = findAddressEntryByName(targetNodeName);
+        
+        if (targetEntry == null) {
+            System.out.println("DEBUG: Unknown target node: " + targetNodeName);
+            // We don't know this node, send an info message back
+            String infoMessage = transactionID + " I " + formatString("Unknown node: " + targetNodeName);
+            sendMessage(infoMessage, sourceAddress, sourcePort);
+            return;
+        }
+        
+        // Extract the transaction ID from the relayed message
+        String relayedTransactionID = relayedMessage.substring(0, 2);
+        System.out.println("DEBUG: Forwarding relayed message to: " + targetNodeName);
+        
+        // Create a response handler for the relay
+        final InetAddress finalSourceAddress = sourceAddress;
+        final int finalSourcePort = sourcePort;
+        final String finalTransactionID = transactionID;
+        
+        ResponseHandler relayHandler = new ResponseHandler() {
+            @Override
+            public void handleResponse(String response) {
+                try {
+                    System.out.println("DEBUG: Received relay response: " + response);
+                    // Replace the transaction ID with the original relay transaction ID
+                    String modifiedResponse = finalTransactionID + response.substring(2);
+                    sendMessage(modifiedResponse, finalSourceAddress, finalSourcePort);
+                } catch (Exception e) {
+                    System.err.println("Error in relay response handler: " + e.getMessage());
+                }
+            }
+            
+            @Override
+            public void handleTimeout() {
+                try {
+                    // Send a timeout info message
+                    String infoMessage = finalTransactionID + " I " + formatString("Relay timeout");
+                    sendMessage(infoMessage, finalSourceAddress, finalSourcePort);
+                } catch (Exception e) {
+                    System.err.println("Error in relay timeout handler: " + e.getMessage());
+                }
+            }
+        };
+        
+        // Register the handler for the response
+        pendingRequests.put(relayedTransactionID, relayHandler);
+        
+        // Forward the message to the target
+        sendMessage(relayedMessage, targetEntry.getInetAddress(), targetEntry.getPort());
+        
+        // Set a timeout handler to clean up if no response is received
+        Timer timer = new Timer();
+        timer.schedule(new TimerTask() {
+            @Override
+            public void run() {
+                ResponseHandler handler = pendingRequests.remove(relayedTransactionID);
+                if (handler != null) {
+                    handler.handleTimeout();
+                }
+            }
+        }, 5000); // 5 second timeout
+    }
+
+    // Handler method for Key Existence Request
+    private void handleExistenceRequest(String transactionID, String key, InetAddress sourceAddress, int sourcePort) throws Exception {
+        // Check if we have this key
+        boolean hasKey = dataEntries.containsKey(key);
+
+        System.out.println("DEBUG: Node " + nodeName + " received existence request for key: " + key);
+        System.out.println("DEBUG: Has key: " + hasKey);
+        System.out.println("DEBUG: Data entries: " + dataEntries.toString());
+        
+        // Determine if we're one of the three closest nodes to the key
+        byte[] keyHashID = HashID.computeHashID(key);
+        boolean isClosest = isAmongClosestNodes(keyHashID);
+        
+        // Determine the response character based on RFC conditions
+        char responseChar;
+        if (hasKey) {
+            responseChar = 'Y';
+        } else if (isClosest) {
+            responseChar = 'N';
+        } else {
+            responseChar = '?';
+        }
+        
+        // Send the response
+        String response = transactionID + " F " + responseChar;
+        sendMessage(response, sourceAddress, sourcePort);
+    }
+
+    // Helper method to check if this node is among the closest to a given hashID
+    private boolean isAmongClosestNodes(byte[] keyHashID) throws Exception {
+        // Calculate the distance from this node to the key
+        int ourDistance = calculateDistance(nodeHashID, keyHashID);
+        
+        // Count how many nodes are strictly closer to the key than us
+        int closerNodes = 0;
+        
+        for (List<AddressEntry> entries : addressEntries.values()) {
+            for (AddressEntry entry : entries) {
+                int otherDistance = calculateDistance(entry.hashID, keyHashID);
+                if (otherDistance < ourDistance) {
+                    closerNodes++;
+                    if (closerNodes >= 3) {
+                        return false; // At least 3 nodes are closer
+                    }
+                }
+            }
+        }
+        
+        return true; // Fewer than 3 nodes are closer
     }
     
     // Handler method for Name Request
@@ -485,13 +623,11 @@ public class Node implements NodeInterface {
     // and are working as intended.
     // ---------------------------------------------------------------------------------------
 
-
-
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
-    // UNCOMMENT AND MOVE THE NameRequestTest.java FILE TO THE MAIN SRC FOLDER, THEN COMPILE AND RUN IT
-    ////////////////////////////////////////////////////////////////////////////////////////////////////
+    ///////////////////////////////////////////////////////////////////////////////////////
+    // UNCOMMENT AND MOVE THE CORRECT FILE TO THE MAIN SRC FOLDER, THEN COMPILE AND RUN IT
+    ///////////////////////////////////////////////////////////////////////////////////////
     
-    // // Helper method for testing 1st method implementation - add an address entry manually
+    // // Helper method for testing 1st AND 4th method implementation - add an address entry manually
     // public void addAddressEntry(String nodeName, String address) throws Exception {
     //     AddressEntry entry = new AddressEntry(nodeName, address);
         
@@ -508,7 +644,20 @@ public class Node implements NodeInterface {
     //     }
     // }
 
+    // // Helper method for testing 2nd and 3rd method implementation
+    // public String[] getRelayStack() {
+    //     return relayStack.toArray(new String[0]);
+    // }
 
+    // // Helper method for testing 4th method implementation - add data directly
+    // public void addData(String key, String value) {
+    //     dataEntries.put(key, value);
+    // }
+
+    // // Debug method for ExistsTest.java (debugging complete)
+    // public String getDataEntriesDebug() {
+    //     return dataEntries.toString();
+    // }
 
     // ---------------------------------------------------------------------------------------
     
@@ -530,8 +679,125 @@ public class Node implements NodeInterface {
 
     // 4th method implementation
     public boolean exists(String key) throws Exception {
-        throw new Exception("Not implemented");
+        // Calculate the key's hash
+        byte[] keyHashID = HashID.computeHashID(key);
+        
+        // Find the closest nodes to this key
+        List<AddressEntry> closestNodes = findClosestNodes(keyHashID);
+        
+        if (closestNodes.isEmpty()) {
+            return false; // No nodes to query
+        }
+        
+        // Create a new transaction ID for this request
+        final String transactionID = generateTransactionID();
+        
+        // Create a key existence request message
+        String request = transactionID + " E " + formatString(key);
+        
+        // Prepare for the response
+        final boolean[] keyExists = {false};
+        final boolean[] responseReceived = {false};
+        
+        // Create a response handler
+        ResponseHandler handler = new ResponseHandler() {
+            @Override
+            public void handleResponse(String response) {
+                // Check if the response is a valid key existence response
+                if (response.length() >= 4 && response.startsWith(transactionID) && response.charAt(3) == 'F') {
+                    // Get the response character
+                    if (response.length() >= 6) {
+                        char responseChar = response.charAt(5);
+                        System.out.println("DEBUG: Received response character: " + responseChar);
+                        
+                        // Y means the key exists
+                        if (responseChar == 'Y') {
+                            keyExists[0] = true;
+                        }
+                    }
+                }
+                responseReceived[0] = true;
+            }
+            
+            @Override
+            public void handleTimeout() {
+                responseReceived[0] = true;
+            }
+        };
+        
+        // Register the handler
+        pendingRequests.put(transactionID, handler);
+        
+        try {
+            // If we have relays, send through the relay chain
+            if (!relayStack.isEmpty()) {
+                // Get the relay node name (for filtering)
+                String relayNodeName = relayStack.get(0);
+                
+                // Filter out the relay node from potential targets
+                List<AddressEntry> potentialTargets = new ArrayList<>();
+                for (AddressEntry entry : closestNodes) {
+                    if (!entry.nodeName.equals(relayNodeName)) {
+                        potentialTargets.add(entry);
+                    }
+                }
+                
+                if (potentialTargets.isEmpty()) {
+                    System.out.println("DEBUG: No valid target nodes (excluding relay)");
+                    return false; // No valid targets
+                }
+                
+                // Use the first non-relay node as the target
+                AddressEntry targetNode = potentialTargets.get(0);
+                String targetNodeName = targetNode.nodeName;
+                
+                System.out.println("DEBUG: Creating relay to target: " + targetNodeName);
+                System.out.println("DEBUG: Using relay: " + relayNodeName);
+                
+                // Create a relay message that tells the relay to send the request to the target
+                String relayedMessage = transactionID + " V " + formatString(targetNodeName) + request;
+                
+                // Send to the relay node
+                AddressEntry relayEntry = findAddressEntryByName(relayNodeName);
+                if (relayEntry == null) {
+                    System.out.println("DEBUG: Relay node not found: " + relayNodeName);
+                    return false; // Can't find the relay node
+                }
+                
+                System.out.println("DEBUG: Sending relay message to: " + relayNodeName);
+                sendMessage(relayedMessage, relayEntry.getInetAddress(), relayEntry.getPort());
+            } else {
+                // Direct send to the closest node
+                AddressEntry closestNode = closestNodes.get(0);
+                sendMessage(request, closestNode.getInetAddress(), closestNode.getPort());
+            }
+            
+            // Set a timeout
+            Timer timer = new Timer();
+            timer.schedule(new TimerTask() {
+                @Override
+                public void run() {
+                    ResponseHandler h = pendingRequests.remove(transactionID);
+                    if (h != null && !responseReceived[0]) {
+                        h.handleTimeout();
+                    }
+                }
+            }, 5000); // 5 second timeout
+            
+            // Wait for the response by processing incoming messages
+            while (!responseReceived[0]) {
+                handleIncomingMessages(100); // Wait with 100ms timeout
+            }
+            
+            return keyExists[0];
+        } catch (Exception e) {
+            // Clean up in case of failure
+            pendingRequests.remove(transactionID);
+            throw e;
+        }
     }
+
+    // ---------------------------------------------------------------------------------------
     
     // 5th method implementation
     public String read(String key) throws Exception {
