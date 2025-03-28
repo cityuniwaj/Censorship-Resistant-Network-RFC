@@ -2,11 +2,11 @@
 // Coursework 2024/2025
 //
 // Submission by
-//  YOUR_NAME_GOES_HERE
-//  YOUR_STUDENT_ID_NUMBER_GOES_HERE
-//  YOUR_EMAIL_GOES_HERE
+//  Wajid Uddin
+//  220028395
+//  wajid.uddin@city.ac.uk
 
-//  Imports required for the implementation
+// Imports
 import java.net.*;
 import java.util.*;
 import java.io.IOException;
@@ -85,9 +85,13 @@ interface NodeInterface {
 
 // Complete this!
 public class Node implements NodeInterface {
+
+    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    // NODE CLASS FIELDS - Properties and state management for the node
+
     // Node information
     private String nodeName;
-    private byte[] nodeHashID;  // SHA-256 hash of the node name
+    private byte[] nodeHashID;
     
     // Network communication
     private DatagramSocket socket;
@@ -95,9 +99,7 @@ public class Node implements NodeInterface {
     private int portNumber;
     
     // Storage for key/value pairs
-    // Map of distances to sets of address key/value pairs (max 3 per distance)
     private Map<Integer, List<AddressEntry>> addressEntries;
-    // Storage for data key/value pairs
     private Map<String, String> dataEntries;
     
     // Relay stack for message routing
@@ -105,12 +107,15 @@ public class Node implements NodeInterface {
     
     // Transaction tracking (for request/response matching)
     private Map<String, ResponseHandler> pendingRequests;
-    private Random random;  // For generating transaction IDs
+    private Random random;
+
+    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    // INNER CLASSES - Supporting data structures for node functionality
     
     // Inner class to represent an address entry with distance information
     private class AddressEntry {
         String nodeName;
-        String address;    // in format "ip:port"
+        String address;
         byte[] hashID;
         
         public AddressEntry(String nodeName, String address) throws Exception {
@@ -136,20 +141,24 @@ public class Node implements NodeInterface {
         void handleResponse(String response);
         void handleTimeout();
     }
-    
+
+    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    // INITIALIZATION - Constructor and setup
+
     // Constructor
     public Node() {
-        // Initialize our data structures
         this.addressEntries = new HashMap<>();
         this.dataEntries = new HashMap<>();
         this.relayStack = new Stack<>();
         this.pendingRequests = new HashMap<>();
         this.random = new Random();
     }
-    
-    // Helper method to calculate distance between two hashIDs
+
+    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    // CORE UTILITY METHODS - HashID calculations and node discovery
+
+    // Core method to calculate distance between two hashIDs
     private int calculateDistance(byte[] hashID1, byte[] hashID2) {
-        // The distance is 256 minus the number of leading bits that match
         int matchingBits = 0;
         
         for (int i = 0; i < hashID1.length; i++) {
@@ -171,7 +180,7 @@ public class Node implements NodeInterface {
         return 256 - matchingBits;
     }
     
-    // Helper method to find the three closest nodes to a given hashID
+    // Core method to find the three closest nodes to a given hashID
     private List<AddressEntry> findClosestNodes(byte[] targetHashID) {
         // Create a list of all address entries with their distances
         List<AddressEntry> allEntries = new ArrayList<>();
@@ -191,8 +200,32 @@ public class Node implements NodeInterface {
         int count = Math.min(3, allEntries.size());
         return allEntries.subList(0, count);
     }
+
+    // Core method to check if this node is among the closest to a given hashID
+    private boolean isAmongClosestNodes(byte[] keyHashID) throws Exception {
+        // Calculate the distance from this node to the key
+        int ourDistance = calculateDistance(nodeHashID, keyHashID);
+        
+        // Count how many nodes are strictly closer to the key than us
+        int closerNodes = 0;
+        
+        for (List<AddressEntry> entries : addressEntries.values()) {
+            for (AddressEntry entry : entries) {
+                int otherDistance = calculateDistance(entry.hashID, keyHashID);
+                if (otherDistance < ourDistance) {
+                    closerNodes++;
+                    if (closerNodes >= 3) {
+                        return false; // At least 3 nodes are closer
+                    }
+                }
+            }
+        }
+        
+        return true; // Fewer than 3 nodes are closer
+    }
     
-    // Helper methods for message formatting and parsing
+    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    // CORE METHODS - Message formatting and parsing
 
     // Generate a random transaction ID (two non-space bytes)
     private String generateTransactionID() {
@@ -221,14 +254,13 @@ public class Node implements NodeInterface {
 
     // Parse a formatted string from a CRN message
     private String parseString(String message, int[] position) {
-        // Find the space count
         int endPos = message.indexOf(' ', position[0]);
         if (endPos == -1) return null;
         
         int spaceCount = Integer.parseInt(message.substring(position[0], endPos));
-        position[0] = endPos + 1; // Move past the first space
+        position[0] = endPos + 1;
         
-        // Find the end of the string (after the correct number of spaces)
+        // Find the end of the string after the correct number of spaces
         int spacesFound = 0;
         int startPos = position[0];
         
@@ -252,6 +284,9 @@ public class Node implements NodeInterface {
         DatagramPacket packet = new DatagramPacket(buffer, buffer.length, address, port);
         socket.send(packet);
     }
+
+    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    // MESSAGE CREATION - Methods to create different message types
 
     // Methods for creating different message types
 
@@ -297,58 +332,9 @@ public class Node implements NodeInterface {
         return transactionID + " V " + formatString(nodeName) + message;
     }
 
-    // setNodeName method
-    public void setNodeName(String nodeName) throws Exception {
-        this.nodeName = nodeName;
-        this.nodeHashID = HashID.computeHashID(nodeName);
-    }
+    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    // MESSAGE PROCESSING - Core message handling logic
 
-    // openPort method
-    public void openPort(int portNumber) throws Exception {
-        this.portNumber = portNumber;
-        this.socket = new DatagramSocket(portNumber);
-        this.localAddress = InetAddress.getLocalHost();
-    }
-    
-    // 1st method implementation
-    public void handleIncomingMessages(int delay) throws Exception {
-        byte[] buffer = new byte[1024]; // Buffer for incoming packets
-        DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-        
-        // Set socket timeout based on delay parameter
-        if (delay > 0) {
-            socket.setSoTimeout(delay);
-        } else {
-            socket.setSoTimeout(0); // Infinite timeout
-        }
-        
-        try {
-            while (true) {
-                try {
-                    // Wait for an incoming packet
-                    socket.receive(packet);
-                    
-                    // Convert packet data to string
-                    String message = new String(packet.getData(), 0, packet.getLength());
-                    
-                    // Process the message
-                    processMessage(message, packet.getAddress(), packet.getPort());
-                    
-                    // If delay is 0, continue indefinitely
-                    // Otherwise, process one message and return
-                    if (delay > 0) {
-                        return;
-                    }
-                } catch (SocketTimeoutException e) {
-                    // Timeout occurred, return as specified
-                    return;
-                }
-            }
-        } catch (IOException e) {
-            throw new Exception("Error handling incoming messages: " + e.getMessage());
-        }
-    }
-    
     // Process an incoming message and send appropriate response
     private void processMessage(String message, InetAddress sourceAddress, int sourcePort) throws Exception {
         // Message must be at least 4 characters: 2 for transaction ID, 1 for space, 1 for message type
@@ -396,6 +382,9 @@ public class Node implements NodeInterface {
             // Other message types will be implemented in future versions
         }
     }
+
+    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    // MESSAGE HANDLERS - Implementation of protocol-specific message handling
 
     // Handler method for Relay Request
     private void handleRelayRequest(String transactionID, String targetNodeName, String relayedMessage, InetAddress sourceAddress, int sourcePort) throws Exception {
@@ -492,29 +481,6 @@ public class Node implements NodeInterface {
         String response = transactionID + " F " + responseChar;
         sendMessage(response, sourceAddress, sourcePort);
     }
-
-    // Helper method to check if this node is among the closest to a given hashID
-    private boolean isAmongClosestNodes(byte[] keyHashID) throws Exception {
-        // Calculate the distance from this node to the key
-        int ourDistance = calculateDistance(nodeHashID, keyHashID);
-        
-        // Count how many nodes are strictly closer to the key than us
-        int closerNodes = 0;
-        
-        for (List<AddressEntry> entries : addressEntries.values()) {
-            for (AddressEntry entry : entries) {
-                int otherDistance = calculateDistance(entry.hashID, keyHashID);
-                if (otherDistance < ourDistance) {
-                    closerNodes++;
-                    if (closerNodes >= 3) {
-                        return false; // At least 3 nodes are closer
-                    }
-                }
-            }
-        }
-        
-        return true; // Fewer than 3 nodes are closer
-    }
     
     // Handler method for Name Request
     private void handleNameRequest(String transactionID, InetAddress sourceAddress, int sourcePort) throws Exception {
@@ -524,10 +490,120 @@ public class Node implements NodeInterface {
         
         // Passive mapping: store the address of this node if we don't have it
         String address = sourceAddress.getHostAddress() + ":" + sourcePort;
-        
-        // We'll handle storing the address in a future version
     }
+
+    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------    
+    // TESTER FILE METHODS TO TEST IMPLEMENTATIONS INDIVIDUALLY
+
+    // Files stored in the Test Programs folder must be COMPILED and RUN in the main source
+    // folder or wherever the main compiled java source code classes are (HashID.class, 
+    // LocalTest.class, Node.class, NodeInterface.class etc)
+    // These files are NOT part of the LocalTest.java program, they are just for me to make
+    // sure that the CRN message implementations i have created are creating nodes
+    // and are working as intended per implementation. This is to make sure as little problems
+    // arise when running the LocalTest.java file in the future, and to help me with finding
+    // and debugging the problems more easily.
+
+    // ---------------------------------------------------------------------------------------
+
+    ///////////////////////////////////////////////////////////////////////////////////////
+    // UNCOMMENT AND MOVE THE CORRECT FILE TO THE MAIN SRC FOLDER, THEN COMPILE AND RUN IT
+    ///////////////////////////////////////////////////////////////////////////////////////
     
+    // // Tester method for testing 3rd handleIncomingMessages() AND 7th exists() methods implementation - add an address entry manually
+    // // Uncomment and use either NameRequestTest or ExistsTest java files.
+    // public void addAddressEntry(String nodeName, String address) throws Exception {
+    //     AddressEntry entry = new AddressEntry(nodeName, address);
+        
+    //     // Calculate the distance between this node and the entry
+    //     int distance = calculateDistance(nodeHashID, entry.hashID);
+        
+    //     // Get or create the list for this distance
+    //     List<AddressEntry> entries = addressEntries.getOrDefault(distance, new ArrayList<>());
+        
+    //     // Add the entry if we have fewer than 3 at this distance
+    //     if (entries.size() < 3) {
+    //         entries.add(entry);
+    //         addressEntries.put(distance, entries);
+    //     }
+    // }
+
+    // // Extra tester method for testing 7th exists() method implementation - MUST BE USED WITH ABOVE METHOD UNCOMENNTED
+    // public void addData(String key, String value) {
+    //     dataEntries.put(key, value);
+    // }
+
+    // ---------------------------------------------------------------------------------------
+
+    // // Tester method for testing 5th pushRelay and 6th popReolay method implementations
+    // public String[] getRelayStack() {
+    //     return relayStack.toArray(new String[0]);
+    // }
+
+    // ---------------------------------------------------------------------------------------
+
+    // // Debug method for ExistsTest.java (debugging complete)
+    // public String getDataEntriesDebug() {
+    //     return dataEntries.toString();
+    // }
+
+    // 1st method implementation ----------------------------------------------------------------------------------------------------------------------------------------------------
+
+    public void setNodeName(String nodeName) throws Exception {
+        this.nodeName = nodeName;
+        this.nodeHashID = HashID.computeHashID(nodeName);
+    }
+
+    // 2nd method implementation ----------------------------------------------------------------------------------------------------------------------------------------------------
+
+    public void openPort(int portNumber) throws Exception {
+        this.portNumber = portNumber;
+        this.socket = new DatagramSocket(portNumber);
+        this.localAddress = InetAddress.getLocalHost();
+    }
+
+    // 3rd method implementation ---------------------------------------------------------------------------------------------------------------------------------------------------
+
+    public void handleIncomingMessages(int delay) throws Exception {
+        byte[] buffer = new byte[1024]; // Buffer for incoming packets
+        DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+        
+        // Set socket timeout based on delay parameter
+        if (delay > 0) {
+            socket.setSoTimeout(delay);
+        } else {
+            socket.setSoTimeout(0); // Infinite timeout
+        }
+        
+        try {
+            while (true) {
+                try {
+                    // Wait for an incoming packet
+                    socket.receive(packet);
+                    
+                    // Convert packet data to string
+                    String message = new String(packet.getData(), 0, packet.getLength());
+                    
+                    // Process the message
+                    processMessage(message, packet.getAddress(), packet.getPort());
+                    
+                    // If delay is 0, continue indefinitely
+                    // Otherwise, process one message and return
+                    if (delay > 0) {
+                        return;
+                    }
+                } catch (SocketTimeoutException e) {
+                    // Timeout occurred, return as specified
+                    return;
+                }
+            }
+        } catch (IOException e) {
+            throw new Exception("Error handling incoming messages: " + e.getMessage());
+        }
+    }
+
+    // 4th method implementation ----------------------------------------------------------------------------------------------------------------------------------------------------
+
     public boolean isActive(String nodeName) throws Exception {
         // Look up the node in our address entries
         AddressEntry entry = findAddressEntryByName(nodeName);
@@ -614,60 +690,15 @@ public class Node implements NodeInterface {
         return null;
     }
 
-    // TESTER FILE HELPER METHODS TO TEST CRN MESSAGES
-    // Files stored in the Test Programs folder must be COMPILED and RUN in the main source
-    // folder or wherever the main compiled java source code classes are (HashID.class, 
-    // LocalTest.class, Node.class, NodeInterface.class etc)
-    // These files are NOT part of the LocalTest.java program, they are just for me to make
-    // sure that the CRN message implementations i have created are creating nodes
-    // and are working as intended.
-    // ---------------------------------------------------------------------------------------
-
-    ///////////////////////////////////////////////////////////////////////////////////////
-    // UNCOMMENT AND MOVE THE CORRECT FILE TO THE MAIN SRC FOLDER, THEN COMPILE AND RUN IT
-    ///////////////////////////////////////////////////////////////////////////////////////
+    // 5th method implementation ----------------------------------------------------------------------------------------------------------------------------------------------------
     
-    // // Helper method for testing 1st AND 4th method implementation - add an address entry manually
-    // public void addAddressEntry(String nodeName, String address) throws Exception {
-    //     AddressEntry entry = new AddressEntry(nodeName, address);
-        
-    //     // Calculate the distance between this node and the entry
-    //     int distance = calculateDistance(nodeHashID, entry.hashID);
-        
-    //     // Get or create the list for this distance
-    //     List<AddressEntry> entries = addressEntries.getOrDefault(distance, new ArrayList<>());
-        
-    //     // Add the entry if we have fewer than 3 at this distance
-    //     if (entries.size() < 3) {
-    //         entries.add(entry);
-    //         addressEntries.put(distance, entries);
-    //     }
-    // }
-
-    // // Helper method for testing 2nd and 3rd method implementation
-    // public String[] getRelayStack() {
-    //     return relayStack.toArray(new String[0]);
-    // }
-
-    // // Helper method for testing 4th method implementation - add data directly
-    // public void addData(String key, String value) {
-    //     dataEntries.put(key, value);
-    // }
-
-    // // Debug method for ExistsTest.java (debugging complete)
-    // public String getDataEntriesDebug() {
-    //     return dataEntries.toString();
-    // }
-
-    // ---------------------------------------------------------------------------------------
-    
-    // 2nd method implementation
     public void pushRelay(String nodeName) throws Exception {
         // Add the node name to the top of the relay stack
         relayStack.push(nodeName);
     }
 
-    // 3rd method implementation
+    // 6th method implementation ----------------------------------------------------------------------------------------------------------------------------------------------------
+
     public void popRelay() throws Exception {
         // Remove the top entry from the relay stack if it's not empty
         if (!relayStack.isEmpty()) {
@@ -675,9 +706,8 @@ public class Node implements NodeInterface {
         }
     }
 
-    // ---------------------------------------------------------------------------------------
+    // 7th method implementation ----------------------------------------------------------------------------------------------------------------------------------------------------
 
-    // 4th method implementation
     public boolean exists(String key) throws Exception {
         // Calculate the key's hash
         byte[] keyHashID = HashID.computeHashID(key);
@@ -797,20 +827,23 @@ public class Node implements NodeInterface {
         }
     }
 
-    // ---------------------------------------------------------------------------------------
+    // 8th method implementation ----------------------------------------------------------------------------------------------------------------------------------------------------
     
-    // 5th method implementation
     public String read(String key) throws Exception {
         throw new Exception("Not implemented");
     }
 
-    // 6th method implementation
+    // 9th method implementation ----------------------------------------------------------------------------------------------------------------------------------------------------
+
     public boolean write(String key, String value) throws Exception {
         throw new Exception("Not implemented");
     }
 
-    // 7th method implementation
+    // 10th method implementation ---------------------------------------------------------------------------------------------------------------------------------------------------
+
     public boolean CAS(String key, String currentValue, String newValue) throws Exception {
         throw new Exception("Not implemented");
     }
+
+    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 }
