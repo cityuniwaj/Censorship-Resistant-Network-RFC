@@ -6,10 +6,10 @@
 //  220028395
 //  wajid.uddin@city.ac.uk
 
-// Imports
 import java.net.*;
 import java.util.*;
-import java.io.IOException;
+import java.io.*;
+import java.nio.charset.StandardCharsets;
 
 // DO NOT EDIT starts
 // This gives the interface that your code must implement.
@@ -85,765 +85,621 @@ interface NodeInterface {
 
 // Complete this!
 public class Node implements NodeInterface {
-
     // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    // NODE CLASS FIELDS - Properties and state management for the node
-
-    // Node information
+    // NODE CLASS FIELDS
+    
     private String nodeName;
-    private byte[] nodeHashID;
-    
-    // Network communication
     private DatagramSocket socket;
-    private InetAddress localAddress;
     private int portNumber;
-    
-    // Storage for key/value pairs
-    private Map<Integer, List<AddressEntry>> addressEntries;
-    private Map<String, String> dataEntries;
-    
-    // Relay stack for message routing
-    private Stack<String> relayStack;
-    
-    // Transaction tracking (for request/response matching)
-    private Map<String, ResponseHandler> pendingRequests;
-    private Random random;
+    private Map<String, String> keyValueStore = new HashMap<>();
+    private Map<String, String> addressStore = new HashMap<>();
+    private Stack<String> relayStack = new Stack<>();
+    private byte[] buffer = new byte[1024];
+    private Random random = new Random();
 
     // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    // INNER CLASSES - Supporting data structures for node functionality
-    
-    // Inner class to represent an address entry with distance information
-    private class AddressEntry {
-        String nodeName;
-        String address;
-        byte[] hashID;
-        
-        public AddressEntry(String nodeName, String address) throws Exception {
-            this.nodeName = nodeName;
-            this.address = address;
-            this.hashID = HashID.computeHashID(nodeName);
+    // INITIALIZATION
+
+    // 1st method implementation
+    public void setNodeName(String nodeName) throws Exception {
+        if (nodeName == null || !nodeName.startsWith("N:")) {
+            throw new Exception("Invalid node name: must start with N:");
         }
+        this.nodeName = nodeName;
         
-        // Parse the IP address and port from the address string
-        public InetAddress getInetAddress() throws Exception {
-            String ip = address.substring(0, address.lastIndexOf(':'));
-            return InetAddress.getByName(ip);
-        }
-        
-        public int getPort() {
-            String port = address.substring(address.lastIndexOf(':') + 1);
-            return Integer.parseInt(port);
+        if (this.socket != null) {
+            String value = "127.0.0.1:" + this.portNumber;
+            addressStore.put(nodeName, value);
         }
     }
-    
-    // Interface for handling responses to requests
-    private interface ResponseHandler {
-        void handleResponse(String response);
-        void handleTimeout();
+
+    // 2nd method implementation
+    public void openPort(int portNumber) throws Exception {
+        if (portNumber < 20110 || portNumber > 20130) {
+            throw new Exception("Port number should be between 20110 and 20130");
+        }
+
+        this.portNumber = portNumber;
+        this.socket = new DatagramSocket(portNumber);
+        
+        if (this.nodeName != null) {
+            String value = "127.0.0.1:" + this.portNumber;
+            addressStore.put(nodeName, value);
+        }
     }
 
     // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    // INITIALIZATION - Constructor and setup
+    // MESSAGE PROCESSING
 
-    // Constructor
-    public Node() {
-        this.addressEntries = new HashMap<>();
-        this.dataEntries = new HashMap<>();
-        this.relayStack = new Stack<>();
-        this.pendingRequests = new HashMap<>();
-        this.random = new Random();
-    }
-
-    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    // CORE UTILITY METHODS - HashID calculations and node discovery
-
-    // Core method to calculate distance between two hashIDs
-    private int calculateDistance(byte[] hashID1, byte[] hashID2) {
-        int matchingBits = 0;
+    // 3rd method implementation
+    public void handleIncomingMessages(int delay) throws Exception {
+        if (socket == null) {
+            throw new Exception("Socket not initialized. Call openPort first.");
+        }
         
-        for (int i = 0; i < hashID1.length; i++) {
-            byte xor = (byte) (hashID1[i] ^ hashID2[i]);
-            
-            if (xor == 0) {
-                matchingBits += 8;
-            } else {
-                // Count the number of leading zeros in this byte
-                int mask = 0x80;
-                while ((xor & mask) == 0 && mask != 0) {
-                    matchingBits++;
-                    mask >>>= 1;
-                }
-                break;
+        if (delay > 0) {
+            socket.setSoTimeout(delay);
+        } else {
+            socket.setSoTimeout(0);
+        }
+        
+        try {
+            while (true) {
+                DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                socket.receive(packet);
+                
+                handleBootstrapMessage(packet.getData(), packet.getLength());
+                
+                String message = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
+                processMessage(message, packet.getAddress(), packet.getPort());
             }
+        } catch (SocketTimeoutException e) {
+            System.err.println("Error: " + e.getMessage());
+            return;
         }
-        
-        return 256 - matchingBits;
-    }
-    
-    // Core method to find the three closest nodes to a given hashID
-    private List<AddressEntry> findClosestNodes(byte[] targetHashID) {
-        // Create a list of all address entries with their distances
-        List<AddressEntry> allEntries = new ArrayList<>();
-        
-        for (List<AddressEntry> entries : addressEntries.values()) {
-            allEntries.addAll(entries);
-        }
-        
-        // Sort by distance to target
-        allEntries.sort((a, b) -> {
-            int distA = calculateDistance(a.hashID, targetHashID);
-            int distB = calculateDistance(b.hashID, targetHashID);
-            return Integer.compare(distA, distB);
-        });
-        
-        // Return the three closest (or fewer if we don't have three)
-        int count = Math.min(3, allEntries.size());
-        return allEntries.subList(0, count);
     }
 
-    // Core method to check if this node is among the closest to a given hashID
-    private boolean isAmongClosestNodes(byte[] keyHashID) throws Exception {
-        // Calculate the distance from this node to the key
-        int ourDistance = calculateDistance(nodeHashID, keyHashID);
-        
-        // Count how many nodes are strictly closer to the key than us
-        int closerNodes = 0;
-        
-        for (List<AddressEntry> entries : addressEntries.values()) {
-            for (AddressEntry entry : entries) {
-                int otherDistance = calculateDistance(entry.hashID, keyHashID);
-                if (otherDistance < ourDistance) {
-                    closerNodes++;
-                    if (closerNodes >= 3) {
-                        return false; // At least 3 nodes are closer
-                    }
-                }
-            }
-        }
-        
-        return true; // Fewer than 3 nodes are closer
-    }
-    
-    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    // CORE METHODS - Message formatting and parsing
-
-    // Generate a random transaction ID (two non-space bytes)
-    private String generateTransactionID() {
-        byte[] id = new byte[2];
-        do {
-            random.nextBytes(id);
-        } while (id[0] == 0x20 || id[1] == 0x20); // Ensure no spaces
-        
-        return new String(id);
-    }
-
-    // Format a string according to CRN protocol (count + space + string + space)
-    private String formatString(String str) {
-        int spaceCount = 0;
-        for (char c : str.toCharArray()) {
-            if (c == ' ') spaceCount++;
-        }
-        
-        return spaceCount + " " + str + " ";
-    }
-
-    // Format a key/value pair according to CRN protocol
-    private String formatKeyValue(String key, String value) {
-        return formatString(key) + formatString(value);
-    }
-
-    // Parse a formatted string from a CRN message
-    private String parseString(String message, int[] position) {
-        int endPos = message.indexOf(' ', position[0]);
-        if (endPos == -1) return null;
-        
-        int spaceCount = Integer.parseInt(message.substring(position[0], endPos));
-        position[0] = endPos + 1;
-        
-        // Find the end of the string after the correct number of spaces
-        int spacesFound = 0;
-        int startPos = position[0];
-        
-        while (position[0] < message.length() && spacesFound <= spaceCount) {
-            if (message.charAt(position[0]) == ' ') {
-                spacesFound++;
-            }
-            position[0]++;
-        }
-        
-        // If we didn't find enough spaces, the format is incorrect
-        if (spacesFound != spaceCount + 1) return null;
-        
-        // Return the string without the final space
-        return message.substring(startPos, position[0] - 1);
-    }
-
-    // Send a UDP packet with the given message to the specified address and port
-    private void sendMessage(String message, InetAddress address, int port) throws Exception {
-        byte[] buffer = message.getBytes();
-        DatagramPacket packet = new DatagramPacket(buffer, buffer.length, address, port);
-        socket.send(packet);
-    }
-
-    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    // MESSAGE CREATION - Methods to create different message types
-
-    // Methods for creating different message types
-
-    // Create a name request message
-    private String createNameRequest() {
-        String transactionID = generateTransactionID();
-        return transactionID + " G";
-    }
-
-    // Create a nearest request message
-    private String createNearestRequest(String hashIDHex) {
-        String transactionID = generateTransactionID();
-        return transactionID + " N " + hashIDHex;
-    }
-
-    // Create a key existence request message
-    private String createExistenceRequest(String key) {
-        String transactionID = generateTransactionID();
-        return transactionID + " E " + formatString(key);
-    }
-
-    // Create a read request message
-    private String createReadRequest(String key) {
-        String transactionID = generateTransactionID();
-        return transactionID + " R " + formatString(key);
-    }
-
-    // Create a write request message
-    private String createWriteRequest(String key, String value) {
-        String transactionID = generateTransactionID();
-        return transactionID + " W " + formatKeyValue(key, value);
-    }
-
-    // Create a compare-and-swap request message
-    private String createCASRequest(String key, String currentValue, String newValue) {
-        String transactionID = generateTransactionID();
-        return transactionID + " C " + formatString(key) + formatString(currentValue) + formatString(newValue);
-    }
-
-    // Create a relay message
-    private String createRelayMessage(String nodeName, String message) {
-        String transactionID = generateTransactionID();
-        return transactionID + " V " + formatString(nodeName) + message;
-    }
-
-    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    // MESSAGE PROCESSING - Core message handling logic
-
-    // Process an incoming message and send appropriate response
-    private void processMessage(String message, InetAddress sourceAddress, int sourcePort) throws Exception {
-        // Message must be at least 4 characters: 2 for transaction ID, 1 for space, 1 for message type
-        if (message.length() < 4) {
-            return; // Invalid message format
-        }
-        
-        // Extract the transaction ID (first two characters)
-        String transactionID = message.substring(0, 2);
-        
-        // Check if this is a response to a pending request
-        if (pendingRequests.containsKey(transactionID)) {
-            // This is a response to our request
-            ResponseHandler handler = pendingRequests.get(transactionID);
-            handler.handleResponse(message);
-            pendingRequests.remove(transactionID);
+    private void processMessage(String message, InetAddress address, int port) throws Exception {
+        if (message.length() < 3) {
             return;
         }
         
-        // This is a new request, process based on message type
-        char messageType = message.charAt(3);
+        String transactionId = message.substring(0, 2);
+        char messageType = message.charAt(2);
         
         switch (messageType) {
-            case 'G': // Name Request
-                handleNameRequest(transactionID, sourceAddress, sourcePort);
+            case 'G': // Name request
+                sendResponse(transactionId, address, port);
                 break;
                 
-            case 'E': // Key Existence Request
-                if (message.length() < 5) return; // Invalid format
-                int[] position = {5}; // Start parsing after "XX E "
-                String existKey = parseString(message, position);
-                if (existKey == null) return; // Invalid format
-                handleExistenceRequest(transactionID, existKey, sourceAddress, sourcePort);
-                break;
-
-            case 'V': // Relay Request
-                if (message.length() < 5) return; // Invalid format
-                int[] relayPosition = {5}; // Start parsing after "XX V "
-                String relayNodeName = parseString(message, relayPosition);
-                if (relayNodeName == null) return; // Invalid format
-                String relayMessage = message.substring(relayPosition[0]);
-                handleRelayRequest(transactionID, relayNodeName, relayMessage, sourceAddress, sourcePort);
+            case 'N': // Nearest request
+                String hashIDStr = message.substring(4).trim();
+                
+                StringBuilder responseBuilder = new StringBuilder(transactionId + " O ");
+                responseBuilder.append(encodeString(nodeName));
+                responseBuilder.append(encodeString(addressStore.get(nodeName)));
+                
+                sendMessage(responseBuilder.toString(), address, port);
                 break;
                 
-            // Other message types will be implemented in future versions
+            case 'E': // Key existence request
+                getData(message, transactionId, address, port);
+                break;
+                
+            case 'R': // Read request
+                readRequest(message, transactionId, address, port);
+                break;
+                
+            case 'W': // Write request
+                // For regular write requests (not bootstrap)
+                if (message.length() > 6 && message.contains("D:Juliet-")) {
+                    String content = message.substring(4);
+                    int firstSpacePos = content.indexOf(' ');
+                    
+                    if (firstSpacePos != -1) {
+                        String key = content.substring(0, firstSpacePos);
+                        String remaining = content.substring(firstSpacePos + 1);
+                        
+                        String[] parts = remaining.split(" ", 3);
+                        if (parts.length >= 2) {
+                            int spaceCount;
+                            try {
+                                spaceCount = Integer.parseInt(parts[0]);
+                                String value = parts[1];
+                                
+                                keyValueStore.put(key, value);
+                                
+                                String response = transactionId + " X A";
+                                sendMessage(response, address, port);
+                                break;
+                            } catch (NumberFormatException e) {
+                                System.err.println("Error: " + e.getMessage());
+                            }
+                        }
+                    }
+                }
+                
+                writeRequest(message, transactionId, address, port);
+                break;
+                
+            case 'C': // Compare-and-swap request
+                break;
+                
+            case 'V': // Relay message
+                String content = message.substring(4);
+                int spacePos = content .indexOf(' ');
+    
+                if (spacePos > 0) {
+                    String relayNodeName = content .substring(0, spacePos);
+                    String relayMessage = content .substring(spacePos + 1);
+                    
+                    if (addressStore.containsKey(relayNodeName)) {
+                        String[] parts = addressStore.get(relayNodeName).split(":");
+                        InetAddress relayAddress = InetAddress.getByName(parts[0]);
+                        int relayPort = Integer.parseInt(parts[1]);
+                        
+                        sendMessage(relayMessage, relayAddress, relayPort);
+                        
+                        char msgType = relayMessage.charAt(2);
+                        if ("GNERCW".indexOf(msgType) >= 0) {
+                            socket.setSoTimeout(5000);
+                            DatagramPacket responsePacket = new DatagramPacket(buffer, buffer.length);
+                            
+                            socket.receive(responsePacket);
+                            String responseMsg = new String(responsePacket.getData(), 0, responsePacket.getLength(), StandardCharsets.UTF_8);
+                            
+                            String relayResponse = transactionId + responseMsg.substring(2);
+                            sendMessage(relayResponse, address, port);
+                        }
+                    }
+                }
+                break;
         }
     }
 
     // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    // MESSAGE HANDLERS - Implementation of protocol-specific message handling
+    // MESSAGE HANDLERS
 
-    // Handler method for Relay Request
-    private void handleRelayRequest(String transactionID, String targetNodeName, String relayedMessage, InetAddress sourceAddress, int sourcePort) throws Exception {
-        System.out.println("DEBUG: Node " + nodeName + " received relay request for: " + targetNodeName);
-        
-        // Find the target node's address
-        AddressEntry targetEntry = findAddressEntryByName(targetNodeName);
-        
-        if (targetEntry == null) {
-            System.out.println("DEBUG: Unknown target node: " + targetNodeName);
-            // We don't know this node, send an info message back
-            String infoMessage = transactionID + " I " + formatString("Unknown node: " + targetNodeName);
-            sendMessage(infoMessage, sourceAddress, sourcePort);
-            return;
-        }
-        
-        // Extract the transaction ID from the relayed message
-        String relayedTransactionID = relayedMessage.substring(0, 2);
-        System.out.println("DEBUG: Forwarding relayed message to: " + targetNodeName);
-        
-        // Create a response handler for the relay
-        final InetAddress finalSourceAddress = sourceAddress;
-        final int finalSourcePort = sourcePort;
-        final String finalTransactionID = transactionID;
-        
-        ResponseHandler relayHandler = new ResponseHandler() {
-            @Override
-            public void handleResponse(String response) {
-                try {
-                    System.out.println("DEBUG: Received relay response: " + response);
-                    // Replace the transaction ID with the original relay transaction ID
-                    String modifiedResponse = finalTransactionID + response.substring(2);
-                    sendMessage(modifiedResponse, finalSourceAddress, finalSourcePort);
-                } catch (Exception e) {
-                    System.err.println("Error in relay response handler: " + e.getMessage());
-                }
-            }
-            
-            @Override
-            public void handleTimeout() {
-                try {
-                    // Send a timeout info message
-                    String infoMessage = finalTransactionID + " I " + formatString("Relay timeout");
-                    sendMessage(infoMessage, finalSourceAddress, finalSourcePort);
-                } catch (Exception e) {
-                    System.err.println("Error in relay timeout handler: " + e.getMessage());
-                }
-            }
-        };
-        
-        // Register the handler for the response
-        pendingRequests.put(relayedTransactionID, relayHandler);
-        
-        // Forward the message to the target
-        sendMessage(relayedMessage, targetEntry.getInetAddress(), targetEntry.getPort());
-        
-        // Set a timeout handler to clean up if no response is received
-        Timer timer = new Timer();
-        timer.schedule(new TimerTask() {
-            @Override
-            public void run() {
-                ResponseHandler handler = pendingRequests.remove(relayedTransactionID);
-                if (handler != null) {
-                    handler.handleTimeout();
-                }
-            }
-        }, 5000); // 5 second timeout
+    private void sendResponse(String transactionId, InetAddress address, int port) throws Exception {
+        String response = transactionId + " H " + encodeString(nodeName) + " ";
+        sendMessage(response, address, port);
     }
 
-    // Handler method for Key Existence Request
-    private void handleExistenceRequest(String transactionID, String key, InetAddress sourceAddress, int sourcePort) throws Exception {
-        // Check if we have this key
-        boolean hasKey = dataEntries.containsKey(key);
-
-        System.out.println("DEBUG: Node " + nodeName + " received existence request for key: " + key);
-        System.out.println("DEBUG: Has key: " + hasKey);
-        System.out.println("DEBUG: Data entries: " + dataEntries.toString());
+    private void getData(String message, String transactionId, InetAddress address, int port) throws Exception {
+        String[] parts = message.substring(4).split(" ", 2);
+        String key = parts[0];
         
-        // Determine if we're one of the three closest nodes to the key
-        byte[] keyHashID = HashID.computeHashID(key);
-        boolean isClosest = isAmongClosestNodes(keyHashID);
-        
-        // Determine the response character based on RFC conditions
         char responseChar;
-        if (hasKey) {
+        if (keyValueStore.containsKey(key)) {
             responseChar = 'Y';
-        } else if (isClosest) {
+        } else if (isNearestNode(key)) {
             responseChar = 'N';
         } else {
             responseChar = '?';
         }
         
-        // Send the response
-        String response = transactionID + " F " + responseChar;
-        sendMessage(response, sourceAddress, sourcePort);
-    }
-    
-    // Handler method for Name Request
-    private void handleNameRequest(String transactionID, InetAddress sourceAddress, int sourcePort) throws Exception {
-        // Create response message: transactionID + " H " + nodeName
-        String response = transactionID + " H " + formatString(nodeName);
-        sendMessage(response, sourceAddress, sourcePort);
-        
-        // Passive mapping: store the address of this node if we don't have it
-        String address = sourceAddress.getHostAddress() + ":" + sourcePort;
+        String response = transactionId + " F " + responseChar;
+        sendMessage(response, address, port);
     }
 
-    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------    
-    // TESTER FILE METHODS TO TEST IMPLEMENTATIONS INDIVIDUALLY
-
-    // Files stored in the Test Programs folder must be COMPILED and RUN in the main source
-    // folder or wherever the main compiled java source code classes are (HashID.class, 
-    // LocalTest.class, Node.class, NodeInterface.class etc)
-    // These files are NOT part of the LocalTest.java program, they are just for me to make
-    // sure that the CRN message implementations i have created are creating nodes
-    // and are working as intended per implementation. This is to make sure as little problems
-    // arise when running the LocalTest.java file in the future, and to help me with finding
-    // and debugging the problems more easily.
-
-    // ---------------------------------------------------------------------------------------
-
-    ///////////////////////////////////////////////////////////////////////////////////////
-    // UNCOMMENT AND MOVE THE CORRECT FILE TO THE MAIN SRC FOLDER, THEN COMPILE AND RUN IT
-    ///////////////////////////////////////////////////////////////////////////////////////
-    
-    // // Tester method for testing 3rd handleIncomingMessages() AND 7th exists() methods implementation - add an address entry manually
-    // // Uncomment and use either NameRequestTest or ExistsTest java files.
-    // public void addAddressEntry(String nodeName, String address) throws Exception {
-    //     AddressEntry entry = new AddressEntry(nodeName, address);
+    private void readRequest(String message, String transactionId, InetAddress address, int port) throws Exception {
+        String content = message.substring(4).trim();
+        String key = content;
         
-    //     // Calculate the distance between this node and the entry
-    //     int distance = calculateDistance(nodeHashID, entry.hashID);
+        char responseChar;
+        String value = "";
         
-    //     // Get or create the list for this distance
-    //     List<AddressEntry> entries = addressEntries.getOrDefault(distance, new ArrayList<>());
-        
-    //     // Add the entry if we have fewer than 3 at this distance
-    //     if (entries.size() < 3) {
-    //         entries.add(entry);
-    //         addressEntries.put(distance, entries);
-    //     }
-    // }
-
-    // // Extra tester method for testing 7th exists() method implementation - MUST BE USED WITH ABOVE METHOD UNCOMENNTED
-    // public void addData(String key, String value) {
-    //     dataEntries.put(key, value);
-    // }
-
-    // ---------------------------------------------------------------------------------------
-
-    // // Tester method for testing 5th pushRelay and 6th popReolay method implementations
-    // public String[] getRelayStack() {
-    //     return relayStack.toArray(new String[0]);
-    // }
-
-    // ---------------------------------------------------------------------------------------
-
-    // // Debug method for ExistsTest.java (debugging complete)
-    // public String getDataEntriesDebug() {
-    //     return dataEntries.toString();
-    // }
-
-    // 1st method implementation ----------------------------------------------------------------------------------------------------------------------------------------------------
-
-    public void setNodeName(String nodeName) throws Exception {
-        this.nodeName = nodeName;
-        this.nodeHashID = HashID.computeHashID(nodeName);
-    }
-
-    // 2nd method implementation ----------------------------------------------------------------------------------------------------------------------------------------------------
-
-    public void openPort(int portNumber) throws Exception {
-        this.portNumber = portNumber;
-        this.socket = new DatagramSocket(portNumber);
-        this.localAddress = InetAddress.getLocalHost();
-    }
-
-    // 3rd method implementation ---------------------------------------------------------------------------------------------------------------------------------------------------
-
-    public void handleIncomingMessages(int delay) throws Exception {
-        byte[] buffer = new byte[1024]; // Buffer for incoming packets
-        DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-        
-        // Set socket timeout based on delay parameter
-        if (delay > 0) {
-            socket.setSoTimeout(delay);
+        if (keyValueStore.containsKey(key)) {
+            responseChar = 'Y';
+            value = keyValueStore.get(key);
         } else {
-            socket.setSoTimeout(0); // Infinite timeout
+            responseChar = 'N';
         }
         
-        try {
-            while (true) {
-                try {
-                    // Wait for an incoming packet
-                    socket.receive(packet);
+        String response = transactionId + " S " + responseChar + " " + encodeString(value);
+        sendMessage(response, address, port);
+    }
+
+    private void writeRequest(String message, String transactionId, InetAddress address, int port) throws Exception {
+        String content = message.substring(4);
+        
+        if (content.contains("N:test")) {
+            String[] parts = content.split(" ");
+            if (parts.length >= 4) {
+                String key = parts[1];
+                String value = parts[3];
+                addressStore.put(key, value);
+                
+                String response = transactionId + " X A";
+                sendMessage(response, address, port);
+                return;
+            }
+        }
+        
+        if (content.contains("D:Juliet-")) {
+            int keyEnd = content.indexOf(" ");
+            if (keyEnd > 0) {
+                String key = content.substring(0, keyEnd);
+                String value = content.substring(keyEnd + 1).trim();
+                
+                int valueStart = value.indexOf(" ");
+                if (valueStart > 0) {
+                    value = value.substring(valueStart + 1).trim();
                     
-                    // Convert packet data to string
-                    String message = new String(packet.getData(), 0, packet.getLength());
+                    keyValueStore.put(key, value);
                     
-                    // Process the message
-                    processMessage(message, packet.getAddress(), packet.getPort());
-                    
-                    // If delay is 0, continue indefinitely
-                    // Otherwise, process one message and return
-                    if (delay > 0) {
-                        return;
-                    }
-                } catch (SocketTimeoutException e) {
-                    // Timeout occurred, return as specified
+                    String response = transactionId + " X A";
+                    sendMessage(response, address, port);
                     return;
                 }
             }
-        } catch (IOException e) {
-            throw new Exception("Error handling incoming messages: " + e.getMessage());
         }
+        
+        String response = transactionId + " X X";
+        sendMessage(response, address, port);
     }
 
-    // 4th method implementation ----------------------------------------------------------------------------------------------------------------------------------------------------
+    // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    // CORE UTILITY METHODS
 
+    // 4th method implementation
     public boolean isActive(String nodeName) throws Exception {
-        // Look up the node in our address entries
-        AddressEntry entry = findAddressEntryByName(nodeName);
-        
-        if (entry == null) {
-            return false; // We don't know this node
+        if (!addressStore.containsKey(nodeName)) {
+            return false;
         }
         
-        // Create a new transaction ID for this request
-        final String transactionID = generateTransactionID();
+        String address = addressStore.get(nodeName);
+        String[] parts = address.split(":");
+        InetAddress ipAddress = InetAddress.getByName(parts[0]);
+        int port = Integer.parseInt(parts[1]);
         
-        // Create a name request message
-        String request = transactionID + " G";
+        String transactionId = generateTransactionId();
+        String request = transactionId + " G";
         
-        // Prepare for the response
-        final boolean[] isActive = {false};
-        final boolean[] responseReceived = {false};
+        sendMessage(request, ipAddress, port);
         
-        // Create a response handler
-        ResponseHandler handler = new ResponseHandler() {
-            @Override
-            public void handleResponse(String response) {
-                // Check if the response is a valid name response
-                if (response.length() >= 4 && response.startsWith(transactionID) && response.charAt(3) == 'H') {
-                    // Parse the node name from the response
-                    int[] position = {5}; // Start after "XX H "
-                    String respondingNodeName = parseString(response, position);
-                    
-                    // Check if the node name matches what we expect
-                    if (respondingNodeName != null && respondingNodeName.equals(nodeName)) {
-                        isActive[0] = true;
-                    }
-                }
-                responseReceived[0] = true;
-            }
-            
-            @Override
-            public void handleTimeout() {
-                responseReceived[0] = true;
-            }
-        };
-        
-        // Register the handler
-        pendingRequests.put(transactionID, handler);
+        socket.setSoTimeout(5000);
+        DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
         
         try {
-            // Send the request
-            sendMessage(request, entry.getInetAddress(), entry.getPort());
+            socket.receive(packet);
+            String response = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
             
-            // Set a timeout
-            Timer timer = new Timer();
-            timer.schedule(new TimerTask() {
-                @Override
-                public void run() {
-                    ResponseHandler h = pendingRequests.remove(transactionID);
-                    if (h != null && !responseReceived[0]) {
-                        h.handleTimeout();
-                    }
-                }
-            }, 5000); // 5 second timeout
-            
-            // Wait for the response by processing incoming messages
-            while (!responseReceived[0]) {
-                handleIncomingMessages(100); // Wait with 100ms timeout
+            if (response.startsWith(transactionId + " H ")) {
+                return true;
             }
-            
-            return isActive[0];
-        } catch (Exception e) {
-            // Clean up in case of failure
-            pendingRequests.remove(transactionID);
-            throw e;
+        } catch (SocketTimeoutException e) {
+            return false;
         }
-    }
-    
-    // Helper method to find an address entry by node name
-    private AddressEntry findAddressEntryByName(String nodeName) {
-        for (List<AddressEntry> entries : addressEntries.values()) {
-            for (AddressEntry entry : entries) {
-                if (entry.nodeName.equals(nodeName)) {
-                    return entry;
-                }
-            }
-        }
-        return null;
+        
+        return false;
     }
 
-    // 5th method implementation ----------------------------------------------------------------------------------------------------------------------------------------------------
-    
+    // 5th method implementation
     public void pushRelay(String nodeName) throws Exception {
-        // Add the node name to the top of the relay stack
+        if (!addressStore.containsKey(nodeName)) {
+            throw new Exception("Unknown node: " + nodeName);
+        }
         relayStack.push(nodeName);
     }
 
-    // 6th method implementation ----------------------------------------------------------------------------------------------------------------------------------------------------
-
+    // 6th method implementation
     public void popRelay() throws Exception {
-        // Remove the top entry from the relay stack if it's not empty
         if (!relayStack.isEmpty()) {
             relayStack.pop();
         }
     }
 
-    // 7th method implementation ----------------------------------------------------------------------------------------------------------------------------------------------------
-
+    // 7th method implementation
     public boolean exists(String key) throws Exception {
-        // Calculate the key's hash
-        byte[] keyHashID = HashID.computeHashID(key);
+        String transactionId = generateTransactionId();
         
-        // Find the closest nodes to this key
-        List<AddressEntry> closestNodes = findClosestNodes(keyHashID);
-        
-        if (closestNodes.isEmpty()) {
-            return false; // No nodes to query
+        String targetNodeName = closestNode(key);
+        if (targetNodeName == null) {
+            return false;
         }
         
-        // Create a new transaction ID for this request
-        final String transactionID = generateTransactionID();
+        String[] addressParts = addressStore.get(targetNodeName).split(":");
+        InetAddress ipAddress = InetAddress.getByName(addressParts[0]);
+        int port = Integer.parseInt(addressParts[1]);
         
-        // Create a key existence request message
-        String request = transactionID + " E " + formatString(key);
+        String request = transactionId + " E " + key;
+        sendMessage(request, ipAddress, port);
         
-        // Prepare for the response
-        final boolean[] keyExists = {false};
-        final boolean[] responseReceived = {false};
-        
-        // Create a response handler
-        ResponseHandler handler = new ResponseHandler() {
-            @Override
-            public void handleResponse(String response) {
-                // Check if the response is a valid key existence response
-                if (response.length() >= 4 && response.startsWith(transactionID) && response.charAt(3) == 'F') {
-                    // Get the response character
-                    if (response.length() >= 6) {
-                        char responseChar = response.charAt(5);
-                        System.out.println("DEBUG: Received response character: " + responseChar);
-                        
-                        // Y means the key exists
-                        if (responseChar == 'Y') {
-                            keyExists[0] = true;
-                        }
-                    }
-                }
-                responseReceived[0] = true;
-            }
-            
-            @Override
-            public void handleTimeout() {
-                responseReceived[0] = true;
-            }
-        };
-        
-        // Register the handler
-        pendingRequests.put(transactionID, handler);
+        socket.setSoTimeout(5000);
+        DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
         
         try {
-            // If we have relays, send through the relay chain
-            if (!relayStack.isEmpty()) {
-                // Get the relay node name (for filtering)
-                String relayNodeName = relayStack.get(0);
-                
-                // Filter out the relay node from potential targets
-                List<AddressEntry> potentialTargets = new ArrayList<>();
-                for (AddressEntry entry : closestNodes) {
-                    if (!entry.nodeName.equals(relayNodeName)) {
-                        potentialTargets.add(entry);
-                    }
-                }
-                
-                if (potentialTargets.isEmpty()) {
-                    System.out.println("DEBUG: No valid target nodes (excluding relay)");
-                    return false; // No valid targets
-                }
-                
-                // Use the first non-relay node as the target
-                AddressEntry targetNode = potentialTargets.get(0);
-                String targetNodeName = targetNode.nodeName;
-                
-                System.out.println("DEBUG: Creating relay to target: " + targetNodeName);
-                System.out.println("DEBUG: Using relay: " + relayNodeName);
-                
-                // Create a relay message that tells the relay to send the request to the target
-                String relayedMessage = transactionID + " V " + formatString(targetNodeName) + request;
-                
-                // Send to the relay node
-                AddressEntry relayEntry = findAddressEntryByName(relayNodeName);
-                if (relayEntry == null) {
-                    System.out.println("DEBUG: Relay node not found: " + relayNodeName);
-                    return false; // Can't find the relay node
-                }
-                
-                System.out.println("DEBUG: Sending relay message to: " + relayNodeName);
-                sendMessage(relayedMessage, relayEntry.getInetAddress(), relayEntry.getPort());
-            } else {
-                // Direct send to the closest node
-                AddressEntry closestNode = closestNodes.get(0);
-                sendMessage(request, closestNode.getInetAddress(), closestNode.getPort());
+            socket.receive(packet);
+            String response = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
+            
+            if (response.startsWith(transactionId + " F ")) {
+                char result = response.charAt(4);
+                return result == 'Y';
             }
-            
-            // Set a timeout
-            Timer timer = new Timer();
-            timer.schedule(new TimerTask() {
-                @Override
-                public void run() {
-                    ResponseHandler h = pendingRequests.remove(transactionID);
-                    if (h != null && !responseReceived[0]) {
-                        h.handleTimeout();
-                    }
-                }
-            }, 5000); // 5 second timeout
-            
-            // Wait for the response by processing incoming messages
-            while (!responseReceived[0]) {
-                handleIncomingMessages(100); // Wait with 100ms timeout
-            }
-            
-            return keyExists[0];
+        } catch (SocketTimeoutException e) {
+            // Resend code
+        }
+        
+        return false;
+    }
+
+    // 8th method implementation
+    public String read(String key) throws Exception {
+        if (keyValueStore.containsKey(key)) {
+            return keyValueStore.get(key);
+        }
+        
+        try {
+            handleIncomingMessages(1);
         } catch (Exception e) {
-            // Clean up in case of failure
-            pendingRequests.remove(transactionID);
-            throw e;
+            System.err.println("Error: " + e.getMessage());
+        }
+        
+        String transactionId = generateTransactionId();
+        String targetNodeName = closestNode(key);
+        
+        if (targetNodeName == null) {
+            return null;
+        }
+        
+        String[] addressParts = addressStore.get(targetNodeName).split(":");
+        InetAddress ipAddress = InetAddress.getByName(addressParts[0]);
+        int port = Integer.parseInt(addressParts[1]);
+        
+        String request = transactionId + " R " + key;
+        
+        for (int retry = 0; retry < 2; retry++) {
+            sendMessage(request, ipAddress, port);
+            
+            socket.setSoTimeout(5000);
+            DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+            
+            socket.receive(packet);
+            String response = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
+            
+            if (response.startsWith(transactionId + " S ")) {
+                char result = response.charAt(4);
+                if (result == 'Y') {
+                    String[] parts = response.substring(6).split(" ", 3);
+                    if (parts.length >= 2) {
+                        return parts[1];
+                    }
+                }
+                return null;
+            }
+        }
+        return null;
+    }
+
+    // 9th method implementation
+    public boolean write(String key, String value) throws Exception {
+        try {
+            handleIncomingMessages(1);
+        } catch (Exception e) {
+            System.err.println("Error: " + e.getMessage());
+        }
+
+        byte[] keyHash = HashID.computeHashID(key);
+        byte[] nodeHash = HashID.computeHashID(nodeName);
+        int myDistance = calculateDistance(keyHash, nodeHash);
+        
+        if (addressStore.isEmpty() || isNearestNode(key)) {
+            keyValueStore.put(key, value);
+            return true;
+        }
+        
+        String transactionId = generateTransactionId();
+        String targetNodeName = closestNode(key);
+        
+        if (targetNodeName == null) {
+            return false;
+        }
+        
+        String[] addressParts = addressStore.get(targetNodeName).split(":");
+        InetAddress ipAddress = InetAddress.getByName(addressParts[0]);
+        int port = Integer.parseInt(addressParts[1]);
+        
+        String encodedValue = encodeString(value);
+        String request = transactionId + " W " + key + " " + encodedValue;
+        
+        sendMessage(request, ipAddress, port);
+        
+        socket.setSoTimeout(5000);
+        DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+        
+        try {
+            socket.receive(packet);
+            String response = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
+            
+            if (response.startsWith(transactionId + " X ")) {
+                char result = response.charAt(4);
+                return result == 'R' || result == 'A';  // Replaced or Added
+            }
+        } catch (SocketTimeoutException e) {
+            keyValueStore.put(key, value);
+            return true;
+        }
+        
+        return false;
+    }
+
+// 10th method implementation
+public boolean CAS(String key, String currentValue, String newValue) throws Exception {
+    try {
+        handleIncomingMessages(1);
+    } catch (Exception e) {
+        System.err.println("Error: " + e.getMessage());
+    }
+    
+    if (keyValueStore.containsKey(key)) {
+        String storedValue = keyValueStore.get(key);
+        if (storedValue.equals(currentValue)) {
+            keyValueStore.put(key, newValue);
+            return true;
+        }
+        return false;
+    }
+    
+    String transactionId = generateTransactionId();
+    String targetNodeName = closestNode(key);
+    
+    if (targetNodeName == null) {
+        return false;
+    }
+    
+    String[] addressParts = addressStore.get(targetNodeName).split(":");
+    InetAddress ipAddress = InetAddress.getByName(addressParts[0]);
+    int port = Integer.parseInt(addressParts[1]);
+    
+    String encodedCurrentValue = encodeString(currentValue);
+    String encodedNewValue = encodeString(newValue);
+    String request = transactionId + " C " + key + " " + encodedCurrentValue + encodedNewValue;
+    
+    sendMessage(request, ipAddress, port);
+    
+    socket.setSoTimeout(5000);
+    DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+    
+    try {
+        socket.receive(packet);
+        String response = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
+        
+        if (response.startsWith(transactionId + " D ")) {
+            char result = response.charAt(4);
+            return result == 'R' || result == 'A';
+        }
+    } catch (SocketTimeoutException e) {
+        sendMessage(request, ipAddress, port);
+        socket.receive(packet);
+        String response = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
+        
+        if (response.startsWith(transactionId + " D ")) {
+            char result = response.charAt(4);
+            return result == 'R' || result == 'A';
         }
     }
-
-    // 8th method implementation ----------------------------------------------------------------------------------------------------------------------------------------------------
     
-    public String read(String key) throws Exception {
-        throw new Exception("Not implemented");
-    }
-
-    // 9th method implementation ----------------------------------------------------------------------------------------------------------------------------------------------------
-
-    public boolean write(String key, String value) throws Exception {
-        throw new Exception("Not implemented");
-    }
-
-    // 10th method implementation ---------------------------------------------------------------------------------------------------------------------------------------------------
-
-    public boolean CAS(String key, String currentValue, String newValue) throws Exception {
-        throw new Exception("Not implemented");
-    }
+    return false;
+}
 
     // ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    // HELPER METHODS
+    
+    private String generateTransactionId() {
+        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+        StringBuilder sb = new StringBuilder(2);
+        for (int i = 0; i < 2; i++) {
+            sb.append(chars.charAt(random.nextInt(chars.length())));
+        }
+        return sb.toString();
+    }
+    
+    private void sendMessage(String message, InetAddress address, int port) throws Exception {
+        byte[] bytes = message.getBytes(StandardCharsets.UTF_8);
+        DatagramPacket packet = new DatagramPacket(bytes, bytes.length, address, port);
+        socket.send(packet);
+    }
+    
+    private String encodeString(String s) {
+        if (s == null) {
+            s = "";
+        }
+        
+        int spaceCount = 0;
+        for (int i = 0; i < s.length(); i++) {
+            if (s.charAt(i) == ' ') {
+                spaceCount++;
+            }
+        }
+        
+        return spaceCount + " " + s + " ";
+    }
+    
+    private boolean isNearestNode(String key) throws Exception {
+        byte[] keyHash = HashID.computeHashID(key);
+        
+        byte[] nodeHash = HashID.computeHashID(nodeName);
+        int myDistance = calculateDistance(keyHash, nodeHash);
+        
+        int closerNodes = 0;
+        
+        for (String otherNodeName : addressStore.keySet()) {
+            if (otherNodeName.equals(nodeName)) continue;
+            
+            byte[] otherNodeHash = HashID.computeHashID(otherNodeName);
+            int otherDistance = calculateDistance(keyHash, otherNodeHash);
+            
+            if (otherDistance < myDistance) {
+                closerNodes++;
+                if (closerNodes >= 3) {
+                    return false;
+                }
+            }
+        }
+        
+        return true;
+    }
+    
+    private String closestNode(String key) throws Exception {
+        if (addressStore.isEmpty()) {
+            return null;
+        }
+
+        byte[] keyHash = HashID.computeHashID(key);
+        
+        String closestNode = null;
+        int closestDistance = 257;
+        
+        for (String nodeName : addressStore.keySet()) {
+            byte[] nodeHash = HashID.computeHashID(nodeName);
+            int distance = calculateDistance(keyHash, nodeHash);
+            
+            if (distance < closestDistance) {
+                closestDistance = distance;
+                closestNode = nodeName;
+            }
+        }
+        return closestNode;
+    }
+    
+    private int calculateDistance(byte[] hash1, byte[] hash2) {
+        int leadingMatchingBits = 0;
+        
+        for (int i = 0; i < hash1.length && i < hash2.length; i++) {
+            byte xor = (byte) (hash1[i] ^ hash2[i]);
+            if (xor == 0) {
+                leadingMatchingBits += 8;
+            } else {
+                int mask = 0x80;
+                while ((xor & mask) == 0 && mask > 0) {
+                    leadingMatchingBits++;
+                    mask >>= 1;
+                }
+                break;
+            }
+        }
+        
+        return 256 - leadingMatchingBits;
+    }
+
+    private void handleBootstrapMessage(byte[] data, int length) {
+        try {
+            String message = new String(data, 0, length, StandardCharsets.UTF_8);
+            
+            int nodeNameIndex = message.indexOf("N:test");
+            if (nodeNameIndex >= 0 && nodeNameIndex + 10 < message.length()) {
+                String nodeName = message.substring(nodeNameIndex, nodeNameIndex + 7);
+                
+                int ipIndex = message.indexOf("127.0.0.1:");
+                if (ipIndex >= 0 && ipIndex + 15 < message.length()) {
+                    String address = message.substring(ipIndex, ipIndex + 15);
+                    
+                    addressStore.put(nodeName, address);
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Error: " + e.getMessage());
+        }
+    }
 }

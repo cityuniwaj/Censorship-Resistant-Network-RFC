@@ -104,19 +104,20 @@ class LocalTest {
 	    }
 	    
 	    // Read them back to make sure the other node handled them correctly
-	    for (int i = 0; i < lines.size(); ++i) {
-		String key = "D:Juliet-" + i;
-		System.out.print("Trying to write " + key);
-		String value = nodes[0].read(key);
-		if (value == null) {
-		    System.out.println(" not found?");
-		} else if (value.equals(lines.get(i))) {
-		    System.out.println(" worked!");
-		    ++successfulTests;
-		} else {
-		    System.out.println(" unexpected string : " + value);
+		// Read them back to make sure the other node handled them correctly
+		for (int i = 0; i < lines.size(); ++i) {
+			String key = "D:Juliet-" + i;
+			System.out.print("Line " + i + ": ");
+			String value = nodes[0].read(key);
+			if (value == null) {
+				System.out.println("not found?");
+			} else if (value.equals(lines.get(i))) {
+				System.out.println(value);
+				++successfulTests;
+			} else {
+				System.out.println("unexpected string : " + value);
+			}
 		}
-	    }
 
 	    if (successfulTests == 2*lines.size()) {
 		System.out.println("All tests worked -- that's a good start!");

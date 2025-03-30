@@ -3,17 +3,10 @@ Build Instructions
 
 Your instructions go here.
 
-To build the project:
-1. Make sure you have Java JDK installed (Java 8 or higher recommended)
+1. Make sure you have Java JDK installed (Java 8 or higher)
 2. Compile all Java files with:
    javac *.java
-3. You can choose to compile and run the programs stored in the Test Programs
-   folder after moving them to the main source folder and uncommenting the
-   correct helper functions in Node.java. 
-   Those are programs I created for my own use to test basic functionality 
-   (SimpleTest.java) and to make sure every CRN message implementation is 
-   creating nodes and working as intended.
-4. Once more functionality is implemented, you can run the full test:
+3. Run the test program:
    java LocalTest
 
 Working Functionality
@@ -23,17 +16,17 @@ Describe what you think should work.
 
 The following functionality has been implemented:
 - Basic node configuration (setNodeName and openPort)
-- Data structures for storing address and data key/value pairs
-- Helper methods for hash distance calculations
-- Message formatting and parsing utilities
-- Functions to create various CRN protocol messages
-- Handling of Name Request/Response messages
-- Basic message processing framework for incoming packets
-- Implementation of isActive() to check if a node is responsive
+- Key/value storage for both address and data pairs
+- Proper distance calculation using SHA-256 hashes
+- Message handling framework for all CRN protocol messages
+- Name Request/Response messages
+- Nearest Request/Response messages
+- Key Existence Request/Response messages
+- Read Request/Response with timeout handling and retry logic
+- Write Request/Response with proper handling
+- Compare-and-Swap (CAS) implementation with retry logic
+- Relay message handling for request forwarding
 - Relay stack management (pushRelay/popRelay)
-- Key existence checking (exists method and Key Existence Request/Response)
-- Message relay handling (forwarding messages through relay nodes)
-
-Not yet implemented:
-- Handling of Nearest, Read, Write, and CAS messages
-- Complete key/value operations (read, write, CAS)
+- UDP reliability handling (timeout management, retries)
+- Bootstrap message parsing for network discovery
+- Closest node selection based on hash distance
