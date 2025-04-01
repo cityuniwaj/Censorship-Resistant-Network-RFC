@@ -144,15 +144,14 @@ public class Node implements NodeInterface {
         }
         
         try {
-            while (true) {
-                DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-                socket.receive(packet);
-                
-                handleBootstrapMessage(packet.getData(), packet.getLength());
-                
-                String message = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
-                processMessage(message, packet.getAddress(), packet.getPort());
-            }
+            DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+            socket.receive(packet);
+            
+            handleBootstrapMessage(packet.getData(), packet.getLength());
+            
+            String message = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
+            processMessage(message, packet.getAddress(), packet.getPort());
+            
         } catch (SocketTimeoutException e) {
             System.err.println("Error: " + e.getMessage());
             return;
@@ -163,6 +162,8 @@ public class Node implements NodeInterface {
         if (message.length() < 3) {
             return;
         }
+
+        System.out.println("RECEIVED: " + message);
         
         String transactionId = message.substring(0, 2);
         char messageType = message.charAt(2);
@@ -191,7 +192,6 @@ public class Node implements NodeInterface {
                 break;
                 
             case 'W': // Write request
-                // For regular write requests (not bootstrap)
                 if (message.length() > 6 && message.contains("D:Juliet-")) {
                     String content = message.substring(4);
                     int firstSpacePos = content.indexOf(' ');
@@ -596,6 +596,7 @@ public boolean CAS(String key, String currentValue, String newValue) throws Exce
     }
     
     private void sendMessage(String message, InetAddress address, int port) throws Exception {
+        System.out.println("SENDING: " + message);
         byte[] bytes = message.getBytes(StandardCharsets.UTF_8);
         DatagramPacket packet = new DatagramPacket(bytes, bytes.length, address, port);
         socket.send(packet);
