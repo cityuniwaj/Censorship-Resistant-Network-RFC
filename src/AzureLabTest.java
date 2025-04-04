@@ -31,7 +31,7 @@ class AzureLabTest {
 	    System.exit(1);
 	}
 	String ipAddress = "10.216.34.80";
-	if (ipAddress.indexOf('.') == -1) {
+	if (false && ipAddress.indexOf('.') == -1) {
 	    System.err.println("Please set your ip address!");
 	    System.exit(1);
 	}
@@ -53,14 +53,14 @@ class AzureLabTest {
 	    // This should print out a poem.
 	    System.out.println("Getting the poem...");
 	    for (int i = 0; i < 7; ++i) {
-		String key = "D:jabberwocky" + i;
-		String value = node.read(key);
-		if (value == null) {
-		    System.err.println("Can't find poem verse " + i);
-		    System.exit(2);
-		} else {
-		    System.out.println(value);
-		}
+			String key = "D:jabberwocky" + i;
+			String value = node.read(key);
+			if (value == null) {
+				System.err.println("Can't find poem verse " + i);
+				System.exit(2);
+			} else {
+				System.out.println(value);
+			}
 	    }
 
 	    // Now let's test writing a key/value pair

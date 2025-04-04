@@ -8,6 +8,7 @@ Your instructions go here.
    javac *.java
 3. Run the test program:
    java LocalTest
+   java AzureLabTest
 
 Working Functionality
 =====================

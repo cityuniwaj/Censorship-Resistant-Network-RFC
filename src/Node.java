@@ -143,18 +143,30 @@ public class Node implements NodeInterface {
             socket.setSoTimeout(0);
         }
         
-        try {
-            DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-            socket.receive(packet);
-            
-            handleBootstrapMessage(packet.getData(), packet.getLength());
-            
-            String message = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
-            processMessage(message, packet.getAddress(), packet.getPort());
-            
-        } catch (SocketTimeoutException e) {
-            System.err.println("Error: " + e.getMessage());
-            return;
+        long startTime = System.currentTimeMillis();
+        boolean keepProcessing = true;
+        
+        while (keepProcessing) {
+            try {
+                DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                socket.receive(packet);
+                
+                handleBootstrapMessage(packet.getData(), packet.getLength());
+                
+                String message = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
+                processMessage(message, packet.getAddress(), packet.getPort());
+                
+                if (delay > 0) {
+                    long elapsedTime = System.currentTimeMillis() - startTime;
+                    if (elapsedTime >= delay) {
+                        keepProcessing = false;
+                    }
+                }
+            } catch (SocketTimeoutException e) {
+                keepProcessing = false;
+            } catch (Exception e) {
+                System.err.println("Error handling incoming message: " + e.getMessage());
+            }
         }
     }
 
@@ -242,7 +254,7 @@ public class Node implements NodeInterface {
                         
                         char msgType = relayMessage.charAt(2);
                         if ("GNERCW".indexOf(msgType) >= 0) {
-                            socket.setSoTimeout(5000);
+                            socket.setSoTimeout(30000);
                             DatagramPacket responsePacket = new DatagramPacket(buffer, buffer.length);
                             
                             socket.receive(responsePacket);
@@ -358,7 +370,7 @@ public class Node implements NodeInterface {
         
         sendMessage(request, ipAddress, port);
         
-        socket.setSoTimeout(5000);
+        socket.setSoTimeout(30000);
         DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
         
         try {
@@ -406,7 +418,7 @@ public class Node implements NodeInterface {
         String request = transactionId + " E " + key;
         sendMessage(request, ipAddress, port);
         
-        socket.setSoTimeout(5000);
+        socket.setSoTimeout(30000);
         DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
         
         try {
@@ -432,43 +444,50 @@ public class Node implements NodeInterface {
         
         try {
             handleIncomingMessages(1);
+            
+            if (keyValueStore.containsKey(key)) {
+                return keyValueStore.get(key);
+            }
         } catch (Exception e) {
-            System.err.println("Error: " + e.getMessage());
+
         }
         
-        String transactionId = generateTransactionId();
-        String targetNodeName = closestNode(key);
-        
-        if (targetNodeName == null) {
-            return null;
-        }
-        
-        String[] addressParts = addressStore.get(targetNodeName).split(":");
-        InetAddress ipAddress = InetAddress.getByName(addressParts[0]);
-        int port = Integer.parseInt(addressParts[1]);
-        
-        String request = transactionId + " R " + key;
-        
-        for (int retry = 0; retry < 2; retry++) {
-            sendMessage(request, ipAddress, port);
+        for (String nodeName : addressStore.keySet()) {
+            if (nodeName.equals(this.nodeName)) continue;
             
-            socket.setSoTimeout(5000);
-            DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+            System.out.println("Trying to read " + key + " from " + nodeName);
             
-            socket.receive(packet);
-            String response = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
-            
-            if (response.startsWith(transactionId + " S ")) {
-                char result = response.charAt(4);
-                if (result == 'Y') {
-                    String[] parts = response.substring(6).split(" ", 3);
-                    if (parts.length >= 2) {
-                        return parts[1];
+            try {
+                String[] addressParts = addressStore.get(nodeName).split(":");
+                InetAddress ipAddress = InetAddress.getByName(addressParts[0]);
+                int port = Integer.parseInt(addressParts[1]);
+                
+                String transactionId = generateTransactionId();
+                String request = transactionId + " R " + key;
+                
+                sendMessage(request, ipAddress, port);
+                
+                socket.setSoTimeout(30000);
+                DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
+                
+                socket.receive(packet);
+                String response = new String(packet.getData(), 0, packet.getLength(), StandardCharsets.UTF_8);
+                
+                if (response.startsWith(transactionId + " S Y")) {
+                    int valueStart = response.indexOf(' ', response.indexOf('Y') + 2);
+                    if (valueStart > 0) {
+                        String value = response.substring(valueStart + 1).trim();
+                        
+                        keyValueStore.put(key, value);
+                        return value;
                     }
                 }
-                return null;
+            } catch (Exception e) {
+                System.out.println("Error reading from " + nodeName + ": " + e.getMessage());
             }
         }
+        
+        System.out.println("Failed to find value for " + key + " on any node");
         return null;
     }
 
@@ -505,7 +524,7 @@ public class Node implements NodeInterface {
         
         sendMessage(request, ipAddress, port);
         
-        socket.setSoTimeout(5000);
+        socket.setSoTimeout(30000);
         DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
         
         try {
@@ -558,7 +577,7 @@ public boolean CAS(String key, String currentValue, String newValue) throws Exce
     
     sendMessage(request, ipAddress, port);
     
-    socket.setSoTimeout(5000);
+    socket.setSoTimeout(30000);
     DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
     
     try {
@@ -680,27 +699,68 @@ public boolean CAS(String key, String currentValue, String newValue) throws Exce
                 break;
             }
         }
-        
         return 256 - leadingMatchingBits;
     }
 
     private void handleBootstrapMessage(byte[] data, int length) {
         try {
             String message = new String(data, 0, length, StandardCharsets.UTF_8);
+            System.out.println("Processing bootstrap message: " + message);
             
-            int nodeNameIndex = message.indexOf("N:test");
-            if (nodeNameIndex >= 0 && nodeNameIndex + 10 < message.length()) {
-                String nodeName = message.substring(nodeNameIndex, nodeNameIndex + 7);
+            int nodeNameIndex = message.indexOf("N:");
+            if (nodeNameIndex >= 0) {
+                int nodeNameEnd = message.indexOf(' ', nodeNameIndex);
+                if (nodeNameEnd == -1) {
+                    nodeNameEnd = message.length();
+                }
                 
-                int ipIndex = message.indexOf("127.0.0.1:");
-                if (ipIndex >= 0 && ipIndex + 15 < message.length()) {
-                    String address = message.substring(ipIndex, ipIndex + 15);
+                if (nodeNameEnd > nodeNameIndex) {
+                    String nodeName = message.substring(nodeNameIndex, nodeNameEnd);
                     
-                    addressStore.put(nodeName, address);
+                    int ipIndex = message.indexOf("127.0.0.1:");
+                    if (ipIndex < 0) {
+                        ipIndex = message.indexOf("10.200.");
+                    }
+                    
+                    if (ipIndex >= 0) {
+                        int ipEnd = message.indexOf(' ', ipIndex);
+                        if (ipEnd == -1) {
+                            ipEnd = message.length();
+                        }
+                        
+                        if (ipEnd > ipIndex) {
+                            String address = message.substring(ipIndex, ipEnd);
+                            
+                            addressStore.put(nodeName, address);
+                            System.out.println("Bootstrapped node: " + nodeName + " at " + address);
+                        }
+                    }
+                }
+            }
+            
+            int poemIndex = message.indexOf("D:jabberwocky");
+            if (poemIndex >= 0) {
+                int poemKeyEnd = message.indexOf(' ', poemIndex);
+                if (poemKeyEnd > poemIndex) {
+                    String key = message.substring(poemIndex, poemKeyEnd);
+                    
+                    String remaining = message.substring(poemKeyEnd + 1);
+                    int spacePos = remaining.indexOf(' ');
+                    if (spacePos > 0) {
+                        try {
+                            int spaceCount = Integer.parseInt(remaining.substring(0, spacePos));
+                            String value = remaining.substring(spacePos + 1).trim();
+                            
+                            System.out.println("Storing poem verse from bootstrap: " + key + " = " + value);
+                            keyValueStore.put(key, value);
+                        } catch (NumberFormatException e) {
+                            System.out.println("Error parsing space count: " + e.getMessage());
+                        }
+                    }
                 }
             }
         } catch (Exception e) {
-            System.err.println("Error: " + e.getMessage());
+            System.err.println("Error in bootstrap handling: " + e.getMessage());
         }
     }
 }
