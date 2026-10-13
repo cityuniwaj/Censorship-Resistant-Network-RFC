@@ -1,8 +1,6 @@
 Build Instructions
 ==================
 
-Your instructions go here.
-
 1. Make sure you have Java JDK installed (Java 8 or higher)
 2. Compile all Java files with:
    javac *.java
@@ -12,8 +10,6 @@ Your instructions go here.
 
 Working Functionality
 =====================
-
-Describe what you think should work.
 
 The following functionality has been implemented:
 - Basic node configuration (setNodeName and openPort)
